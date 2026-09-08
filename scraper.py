@@ -33,7 +33,7 @@ CONFIG = {
     "prix_max": 3000,
     "km_max": 140000,
     "ville": "ville-de-montreal",
-    "rayon_km": 50,
+    "rayon_km": 200,
 
     # Marques prioritaires (⭐ dans les notifs)
     "marques_prioritaires": ["toyota", "honda", "hyundai"],
@@ -255,7 +255,6 @@ HEADERS = {
 def chercher_kijiji() -> list[dict]:
     annonces = []
     prix_max = CONFIG["prix_max"]
-    ville = CONFIG["ville"]
 
     url = (
         f"https://www.kijiji.ca/b-autos-camions/grand-montreal"
@@ -531,25 +530,20 @@ def formater_notification(annonce: dict, analyse: dict) -> str:
 
 
 def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
-    # ❌ Pas de prix = on skip
     if annonce["prix"] is None:
         return False, {"raison": "Aucun prix indiqué"}
 
-    # ❌ Prix trop élevé
     if annonce["prix"] > CONFIG["prix_max"]:
         return False, {"raison": f"Prix trop élevé: ${annonce['prix']}"}
 
-    # ❌ Prix suspectement bas (probable arnaque ou pour pièces)
     if annonce["prix"] < 300:
         return False, {"raison": f"Prix trop bas (arnaque?): ${annonce['prix']}"}
 
-    # ❌ Trop de km
     if annonce["km"] and annonce["km"] > CONFIG["km_max"]:
         return False, {"raison": f"Trop de km: {annonce['km']}"}
 
     texte = annonce["texte_complet"].lower()
 
-    # ❌ Filtrer les concessionnaires et annonces commerciales
     mots_concessionnaire = [
         r"concessionnaire", r"dealership", r"dealer",
         r"certified\s+pre.owned", r"véhicule\s+certifié",
@@ -569,12 +563,10 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
         if re.search(pattern, texte):
             return False, {"raison": f"Concessionnaire détecté: {pattern}"}
 
-    # ❌ Filtrer les voitures trop récentes (2020+, impossible sous 3000$ légitime)
     annee = extraire_annee(annonce["titre"])
     if annee and annee >= 2020:
         return False, {"raison": f"Voiture trop récente ({annee})"}
 
-    # ❌ Filtrer les non-voitures (motos, VTT, pièces, etc.)
     mots_non_voiture = [
         r"\bmoto\b", r"\bmotorcycle\b", r"\bscooter\b",
         r"\bvtt\b", r"\batv\b", r"\bquad\b",
@@ -591,12 +583,10 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
         if re.search(pattern, texte):
             return False, {"raison": f"Pas une voiture: {pattern}"}
 
-    # Analyse les problèmes (va chercher la description complète)
     details = obtenir_details(annonce)
     texte_complet = f"{annonce['texte_complet']} {details}"
     analyse = analyser_problemes(texte_complet)
 
-    # ❌ Vérifier les filtres concessionnaire dans les détails aussi
     for pattern in mots_concessionnaire:
         if re.search(pattern, details.lower()):
             return False, {"raison": f"Concessionnaire détecté (détails): {pattern}"}
@@ -604,7 +594,6 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
     if analyse["verdict"] == "REJETÉ":
         return False, analyse
 
-    # Mettre à jour le km si on l'a trouvé dans les détails
     if annonce["km"] is None:
         km = extraire_km(details)
         if km:
@@ -619,6 +608,7 @@ def executer():
     print(f"\n{'='*60}")
     print(f"🚗 Moniteur Auto Montréal — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"   Prix max: ${CONFIG['prix_max']} | KM max: {CONFIG['km_max']:,}")
+    print(f"   Rayon: {CONFIG['rayon_km']} km autour de Montréal")
     print(f"   Marques prioritaires: {', '.join(CONFIG['marques_prioritaires'])}")
     print(f"   + toutes les autres marques qui respectent les critères")
     print(f"{'='*60}\n")
@@ -679,6 +669,7 @@ def tester_telegram():
         "🧪 <b>TEST — Moniteur Auto Montréal</b>\n\n"
         "✅ La connexion Telegram fonctionne!\n"
         f"🔍 Recherche: toutes les voitures ≤ ${CONFIG['prix_max']} / ≤ {CONFIG['km_max']:,} km\n"
+        f"📍 Rayon: {CONFIG['rayon_km']} km autour de Montréal\n"
         f"⭐ Marques prioritaires: {marques}\n"
         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
