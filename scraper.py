@@ -257,12 +257,14 @@ def chercher_kijiji() -> list[dict]:
     prix_max = CONFIG["prix_max"]
     ville = CONFIG["ville"]
 
-    url = (
-        f"https://www.kijiji.ca/b-autos-camions/{ville}"
-        f"/k0c174l1700281"
+        url = (
+        f"https://www.kijiji.ca/b-autos-camions/grand-montreal"
+        f"/k0c174l80002"
         f"?price=__${prix_max}"
         f"&kilometers=__140000km"
         f"&sort=dateDesc"
+        f"&radius=200.0"
+        f"&address=Montr%C3%A9al%2C+QC"
     )
 
     print(f"🔍 Recherche Kijiji (toutes marques): {url}")
