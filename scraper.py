@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-🚗 Moniteur de voitures - Kijiji & Craigslist
-Cherche automatiquement des Toyota Corolla à bon prix à Montréal
+🚗 Moniteur de voitures — Kijiji & Craigslist
+Cherche automatiquement des voitures à bon prix à Montréal
 et envoie des notifications Telegram quand une annonce correspond.
+
+Marques prioritaires: Toyota, Honda, Hyundai (⭐ dans les notifs)
+Accepte aussi: toute autre marque qui respecte les critères
 
 Utilisation:
     python scraper.py              # Exécution unique
@@ -27,12 +30,13 @@ from pathlib import Path
 
 CONFIG = {
     # Critères de recherche
-    "marque": "toyota",
-    "modele": "corolla",
     "prix_max": 3000,
     "km_max": 140000,
     "ville": "ville-de-montreal",
     "rayon_km": 50,
+
+    # Marques prioritaires (⭐ dans les notifs)
+    "marques_prioritaires": ["toyota", "honda", "hyundai"],
 
     # Telegram (voir README pour obtenir ces valeurs)
     "telegram_bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
@@ -51,9 +55,7 @@ CONFIG = {
 # FILTRAGE INTELLIGENT — Problèmes mineurs vs majeurs
 # ═══════════════════════════════════════════════════════════════
 
-# Mots-clés indiquant des PROBLÈMES MAJEURS → on REJETTE l'annonce
 PROBLEMES_MAJEURS = [
-    # Mécanique grave
     r"transmission\s+(à\s+changer|finie|brisée|morte|slip|patine)",
     r"moteur\s+(à\s+changer|brûlé|mort|fini|grippé|seized|blown)",
     r"engine\s+(blown|seized|knock|replacement)",
@@ -80,7 +82,6 @@ PROBLEMES_MAJEURS = [
     r"cracked\s+block", r"bloc\s+(fissuré|craqué)",
 ]
 
-# Mots-clés indiquant des PROBLÈMES MINEURS → on ACCEPTE
 PROBLEMES_MINEURS = [
     r"égratignure", r"scratch", r"éraflure",
     r"bosse\s+mineur", r"small\s+dent", r"minor\s+dent", r"petite\s+bosse",
@@ -106,11 +107,10 @@ PROBLEMES_MINEURS = [
     r"suspension\s+(usée|worn|bruit|noise)",
     r"strut", r"amortisseur", r"shock",
     r"alignment", r"alignement",
-    r"needs?\s+(inspection|safety)", r"à\s+inspecter",
 ]
 
 # ═══════════════════════════════════════════════════════════════
-# FICHIER D'HISTORIQUE — évite de renvoyer la même annonce
+# FICHIER D'HISTORIQUE
 # ═══════════════════════════════════════════════════════════════
 
 HISTORIQUE_PATH = Path(__file__).parent / "annonces_vues.json"
@@ -129,12 +129,49 @@ def sauvegarder_historique(historique: set):
 
 
 # ═══════════════════════════════════════════════════════════════
+# DÉTECTION DE MARQUE
+# ═══════════════════════════════════════════════════════════════
+
+MARQUES_CONNUES = {
+    "toyota": ["toyota", "camry", "corolla", "rav4", "yaris", "matrix", "prius", "echo", "tercel", "celica", "solara", "avalon", "venza", "sienna", "tacoma", "tundra", "highlander", "4runner", "sequoia", "supra"],
+    "honda": ["honda", "civic", "accord", "fit", "crv", "cr-v", "hrv", "hr-v", "element", "insight", "prelude", "del sol", "odyssey", "pilot", "ridgeline", "passport"],
+    "hyundai": ["hyundai", "elantra", "sonata", "accent", "tucson", "santa fe", "veloster", "genesis", "kona", "venue", "ioniq", "tiburon"],
+    "nissan": ["nissan", "sentra", "altima", "versa", "maxima", "rogue", "pathfinder", "murano", "frontier", "titan", "juke", "kicks"],
+    "mazda": ["mazda", "mazda3", "mazda 3", "mazda6", "mazda 6", "cx-5", "cx5", "cx-3", "cx3", "mx-5", "miata", "protege", "tribute"],
+    "subaru": ["subaru", "impreza", "outback", "forester", "legacy", "wrx", "crosstrek", "brz"],
+    "kia": ["kia", "forte", "soul", "rio", "optima", "sportage", "sorento", "seltos", "stinger", "niro", "telluride"],
+    "volkswagen": ["volkswagen", "vw", "jetta", "golf", "passat", "tiguan", "atlas", "beetle"],
+    "ford": ["ford", "focus", "fusion", "fiesta", "escape", "explorer", "mustang", "ranger", "f-150", "f150", "taurus", "edge"],
+    "chevrolet": ["chevrolet", "chevy", "cruze", "malibu", "impala", "equinox", "traverse", "trax", "spark", "sonic", "cobalt", "cavalier", "camaro", "silverado"],
+    "mitsubishi": ["mitsubishi", "lancer", "outlander", "eclipse", "rvr", "mirage"],
+    "dodge": ["dodge", "dart", "charger", "challenger", "journey", "caravan", "grand caravan", "durango", "neon"],
+    "pontiac": ["pontiac", "vibe", "g5", "g6", "sunfire", "grand prix", "grand am", "wave"],
+    "saturn": ["saturn", "ion", "astra", "vue", "outlook"],
+    "suzuki": ["suzuki", "swift", "sx4", "aerio", "vitara", "grand vitara"],
+    "acura": ["acura", "integra", "rsx", "tl", "tsx", "el", "csx", "mdx", "rdx", "ilx", "tlx"],
+}
+
+
+def detecter_marque(texte: str) -> str | None:
+    texte_lower = texte.lower()
+    for marque, mots_cles in MARQUES_CONNUES.items():
+        for mot in mots_cles:
+            if mot in texte_lower:
+                return marque
+    return None
+
+
+def est_marque_prioritaire(texte: str) -> bool:
+    marque = detecter_marque(texte)
+    return marque in CONFIG["marques_prioritaires"]
+
+
+# ═══════════════════════════════════════════════════════════════
 # ANALYSE DES ANNONCES
 # ═══════════════════════════════════════════════════════════════
 
 
 def analyser_problemes(texte: str) -> dict:
-    """Analyse le texte d'une annonce pour détecter les problèmes."""
     texte_lower = texte.lower()
     majeurs_trouves = []
     mineurs_trouves = []
@@ -157,7 +194,6 @@ def analyser_problemes(texte: str) -> dict:
 
 
 def extraire_km(texte: str) -> int | None:
-    """Extrait le kilométrage d'un texte."""
     patterns = [
         r"([\d,.\s]+)\s*km",
         r"([\d,.\s]+)\s*kilo",
@@ -179,7 +215,6 @@ def extraire_km(texte: str) -> int | None:
 
 
 def extraire_prix(texte: str) -> int | None:
-    """Extrait le prix d'un texte."""
     patterns = [
         r"\$\s*([\d,.\s]+)",
         r"([\d,.\s]+)\s*\$",
@@ -198,6 +233,13 @@ def extraire_prix(texte: str) -> int | None:
     return None
 
 
+def extraire_annee(texte: str) -> int | None:
+    match = re.search(r"\b(19[89]\d|20[0-2]\d)\b", texte)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════
 # SCRAPER KIJIJI
 # ═══════════════════════════════════════════════════════════════
@@ -211,27 +253,25 @@ HEADERS = {
 
 
 def chercher_kijiji() -> list[dict]:
-    """Cherche des Toyota Corolla sur Kijiji Montréal."""
     annonces = []
     prix_max = CONFIG["prix_max"]
     ville = CONFIG["ville"]
 
     url = (
         f"https://www.kijiji.ca/b-autos-camions/{ville}"
-        f"/toyota-corolla/k0c174l1700281"
+        f"/k0c174l1700281"
         f"?price=__${prix_max}"
         f"&kilometers=__140000km"
         f"&sort=dateDesc"
     )
 
-    print(f"🔍 Recherche Kijiji: {url}")
+    print(f"🔍 Recherche Kijiji (toutes marques): {url}")
 
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Kijiji utilise différentes structures — on essaie plusieurs sélecteurs
         items = soup.select("[data-listing-id]")
         if not items:
             items = soup.select("li.search-item, div.search-item")
@@ -256,8 +296,6 @@ def chercher_kijiji() -> list[dict]:
 
 
 def parser_annonce_kijiji(item) -> dict | None:
-    """Parse une annonce Kijiji individuelle."""
-    # Titre
     titre_el = item.select_one("a.title, h3 a, [data-testid='listing-title'] a, a[class*='title']")
     if not titre_el:
         titre_el = item.select_one("a")
@@ -269,16 +307,13 @@ def parser_annonce_kijiji(item) -> dict | None:
     if lien and not lien.startswith("http"):
         lien = "https://www.kijiji.ca" + lien
 
-    # Prix
     prix_el = item.select_one(".price, [class*='price'], [data-testid='listing-price']")
     prix_texte = prix_el.get_text(strip=True) if prix_el else ""
     prix = extraire_prix(prix_texte) if prix_texte else None
 
-    # Description courte
     desc_el = item.select_one(".description, [class*='description']")
     description = desc_el.get_text(strip=True) if desc_el else ""
 
-    # Kilométrage (souvent dans les attributs)
     km = None
     attrs = item.select("[class*='attribute'], [class*='detail']")
     for attr in attrs:
@@ -291,7 +326,6 @@ def parser_annonce_kijiji(item) -> dict | None:
     if km is None:
         km = extraire_km(titre + " " + description + " " + prix_texte)
 
-    # ID unique
     listing_id = item.get("data-listing-id", "")
     if not listing_id:
         listing_id = hashlib.md5(lien.encode()).hexdigest()[:12]
@@ -314,18 +348,16 @@ def parser_annonce_kijiji(item) -> dict | None:
 
 
 def chercher_craigslist() -> list[dict]:
-    """Cherche des Toyota Corolla sur Craigslist Montréal."""
     annonces = []
     prix_max = CONFIG["prix_max"]
 
     url = (
         f"https://montreal.craigslist.org/search/cta"
-        f"?query=toyota+corolla"
-        f"&max_price={prix_max}"
+        f"?max_price={prix_max}"
         f"&sort=date"
     )
 
-    print(f"🔍 Recherche Craigslist: {url}")
+    print(f"🔍 Recherche Craigslist (toutes marques): {url}")
 
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
@@ -337,7 +369,6 @@ def chercher_craigslist() -> list[dict]:
 
         for item in items:
             try:
-                # Titre + lien
                 titre_el = item.select_one("a.titlestring, a.posting-title, a[class*='title'], a")
                 if not titre_el:
                     continue
@@ -347,12 +378,10 @@ def chercher_craigslist() -> list[dict]:
                 if lien and not lien.startswith("http"):
                     lien = "https://montreal.craigslist.org" + lien
 
-                # Prix
                 prix_el = item.select_one(".priceinfo, .result-price, [class*='price']")
                 prix_texte = prix_el.get_text(strip=True) if prix_el else ""
                 prix = extraire_prix(prix_texte)
 
-                # Détails
                 meta_el = item.select_one(".meta, .result-meta")
                 meta = meta_el.get_text(strip=True) if meta_el else ""
                 km = extraire_km(titre + " " + meta)
@@ -381,32 +410,28 @@ def chercher_craigslist() -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# DÉTAILS D'UNE ANNONCE (fetch la page complète)
+# DÉTAILS D'UNE ANNONCE
 # ═══════════════════════════════════════════════════════════════
 
 
 def obtenir_details(annonce: dict) -> str:
-    """Va chercher la description complète d'une annonce."""
     if not annonce.get("lien"):
         return annonce.get("description", "")
 
     try:
-        time.sleep(1)  # politesse
+        time.sleep(1)
         resp = requests.get(annonce["lien"], headers=HEADERS, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Kijiji
         desc = soup.select_one("[class*='descriptionContainer'], #posti-description")
         if desc:
             return desc.get_text(strip=True)
 
-        # Craigslist
         desc = soup.select_one("#postingbody")
         if desc:
             return desc.get_text(strip=True)
 
-        # Fallback
         return soup.get_text(strip=True)[:2000]
 
     except Exception as e:
@@ -420,7 +445,6 @@ def obtenir_details(annonce: dict) -> str:
 
 
 def envoyer_telegram(message: str):
-    """Envoie un message via Telegram Bot."""
     token = CONFIG["telegram_bot_token"]
     chat_id = CONFIG["telegram_chat_id"]
 
@@ -448,7 +472,6 @@ def envoyer_telegram(message: str):
 
 
 def envoyer_email(sujet: str, corps: str):
-    """Envoie un email via Gmail SMTP."""
     if not CONFIG["email_actif"]:
         return
 
@@ -471,15 +494,25 @@ def envoyer_email(sujet: str, corps: str):
 
 
 def formater_notification(annonce: dict, analyse: dict) -> str:
-    """Formate le message de notification."""
     prix = f"${annonce['prix']:,}" if annonce["prix"] else "Prix non indiqué"
     km = f"{annonce['km']:,} km" if annonce["km"] else "KM non indiqué"
     mineurs = ", ".join(analyse["mineurs"][:5]) if analyse["mineurs"] else "Aucun détecté"
 
+    texte = annonce["texte_complet"]
+    marque = detecter_marque(texte)
+    marque_display = marque.upper() if marque else "AUTRE"
+    annee = extraire_annee(annonce["titre"])
+    annee_display = str(annee) if annee else "?"
+
+    prioritaire = est_marque_prioritaire(texte)
+    etoile = "⭐ " if prioritaire else ""
+    badge = " — MARQUE PRIORITAIRE ⭐" if prioritaire else ""
+
     return (
-        f"🚗 <b>NOUVELLE ANNONCE TROUVÉE!</b>\n"
+        f"🚗 <b>{etoile}NOUVELLE ANNONCE TROUVÉE!{badge}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 <b>{annonce['titre']}</b>\n"
+        f"🏷️ Marque: <b>{marque_display}</b> | Année: <b>{annee_display}</b>\n"
         f"💰 Prix: <b>{prix}</b>\n"
         f"📏 Kilométrage: <b>{km}</b>\n"
         f"📍 Source: {annonce['source']}\n"
@@ -494,11 +527,8 @@ def formater_notification(annonce: dict, analyse: dict) -> str:
 # LOGIQUE PRINCIPALE
 # ═══════════════════════════════════════════════════════════════
 
+
 def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
-    """
-    Applique tous les filtres sur une annonce.
-    Retourne (acceptée: bool, analyse: dict)
-    """
     # ❌ Pas de prix = on skip
     if annonce["prix"] is None:
         return False, {"raison": "Aucun prix indiqué"}
@@ -515,10 +545,7 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
     if annonce["km"] and annonce["km"] > CONFIG["km_max"]:
         return False, {"raison": f"Trop de km: {annonce['km']}"}
 
-    # Vérifie que c'est bien une Corolla
     texte = annonce["texte_complet"].lower()
-    if "corolla" not in texte:
-        return False, {"raison": "Pas une Corolla"}
 
     # ❌ Filtrer les concessionnaires et annonces commerciales
     mots_concessionnaire = [
@@ -540,16 +567,37 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
         if re.search(pattern, texte):
             return False, {"raison": f"Concessionnaire détecté: {pattern}"}
 
-    # ❌ Filtrer les voitures trop récentes (neuves/quasi-neuves)
-    annees_recentes = [str(y) for y in range(2020, 2027)]
-    for annee in annees_recentes:
-        if annee in annonce["titre"]:
-            return False, {"raison": f"Voiture trop récente ({annee})"}
+    # ❌ Filtrer les voitures trop récentes (2020+, impossible sous 3000$ légitime)
+    annee = extraire_annee(annonce["titre"])
+    if annee and annee >= 2020:
+        return False, {"raison": f"Voiture trop récente ({annee})"}
 
-    # Analyse les problèmes
+    # ❌ Filtrer les non-voitures (motos, VTT, pièces, etc.)
+    mots_non_voiture = [
+        r"\bmoto\b", r"\bmotorcycle\b", r"\bscooter\b",
+        r"\bvtt\b", r"\batv\b", r"\bquad\b",
+        r"\bbateau\b", r"\bboat\b",
+        r"\bmotoneige\b", r"\bsnowmobile\b",
+        r"\bremorque\b", r"\btrailer\b",
+        r"\bcamion\s+lourd\b", r"\bheavy\s+truck\b",
+        r"\bpièces?\s+d[e']", r"\bparts\s+for\b",
+        r"\broue", r"\btire[s]?\s+for\s+sale",
+        r"\bjante", r"\brim[s]?\s+for\b",
+        r"\bmag[s]?\s+(pour|for)\b",
+    ]
+    for pattern in mots_non_voiture:
+        if re.search(pattern, texte):
+            return False, {"raison": f"Pas une voiture: {pattern}"}
+
+    # Analyse les problèmes (va chercher la description complète)
     details = obtenir_details(annonce)
     texte_complet = f"{annonce['texte_complet']} {details}"
     analyse = analyser_problemes(texte_complet)
+
+    # ❌ Vérifier les filtres concessionnaire dans les détails aussi
+    for pattern in mots_concessionnaire:
+        if re.search(pattern, details.lower()):
+            return False, {"raison": f"Concessionnaire détecté (détails): {pattern}"}
 
     if analyse["verdict"] == "REJETÉ":
         return False, analyse
@@ -565,18 +613,18 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
     return True, analyse
 
 
-
 def executer():
-    """Fonction principale — cherche et filtre les annonces."""
     print(f"\n{'='*60}")
-    print(f"🚗 Moniteur Toyota Corolla — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"🚗 Moniteur Auto Montréal — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"   Prix max: ${CONFIG['prix_max']} | KM max: {CONFIG['km_max']:,}")
+    print(f"   Marques prioritaires: {', '.join(CONFIG['marques_prioritaires'])}")
+    print(f"   + toutes les autres marques qui respectent les critères")
     print(f"{'='*60}\n")
 
     historique = charger_historique()
     nouvelles = 0
+    prioritaires = 0
 
-    # Chercher sur toutes les sources
     toutes_annonces = []
     toutes_annonces.extend(chercher_kijiji())
     time.sleep(2)
@@ -585,7 +633,6 @@ def executer():
     print(f"\n📊 Total: {len(toutes_annonces)} annonces trouvées")
 
     for annonce in toutes_annonces:
-        # Déjà vue?
         if annonce["id"] in historique:
             continue
 
@@ -596,12 +643,14 @@ def executer():
 
         if acceptee:
             nouvelles += 1
+            if est_marque_prioritaire(annonce["texte_complet"]):
+                prioritaires += 1
             message = formater_notification(annonce, analyse)
             print(f"   ✅ ACCEPTÉE — Envoi notification...")
             envoyer_telegram(message)
             if CONFIG["email_actif"]:
                 envoyer_email(
-                    f"🚗 Toyota Corolla trouvée — {annonce['prix']}$",
+                    f"🚗 Voiture trouvée — {annonce['prix']}$",
                     message.replace("\n", "<br>"),
                 )
             time.sleep(1)
@@ -616,23 +665,22 @@ def executer():
 
     print(f"\n{'='*60}")
     print(f"✅ Terminé! {nouvelles} nouvelle(s) annonce(s) envoyée(s)")
+    print(f"   dont {prioritaires} marque(s) prioritaire(s) ⭐")
     print(f"   {len(historique)} annonces dans l'historique total")
     print(f"{'='*60}\n")
 
 
 def tester_telegram():
-    """Envoie un message test sur Telegram."""
     print("📤 Test de notification Telegram...")
+    marques = ", ".join(CONFIG["marques_prioritaires"])
     envoyer_telegram(
-        "🧪 <b>TEST — Moniteur Toyota Corolla</b>\n\n"
+        "🧪 <b>TEST — Moniteur Auto Montréal</b>\n\n"
         "✅ La connexion Telegram fonctionne!\n"
+        f"🔍 Recherche: toutes les voitures ≤ ${CONFIG['prix_max']} / ≤ {CONFIG['km_max']:,} km\n"
+        f"⭐ Marques prioritaires: {marques}\n"
         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
 
-
-# ═══════════════════════════════════════════════════════════════
-# POINT D'ENTRÉE
-# ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     if "--test" in sys.argv:
