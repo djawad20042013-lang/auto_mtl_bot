@@ -257,7 +257,7 @@ def chercher_kijiji() -> list[dict]:
     prix_max = CONFIG["prix_max"]
     ville = CONFIG["ville"]
 
-        url = (
+    url = (
         f"https://www.kijiji.ca/b-autos-camions/grand-montreal"
         f"/k0c174l80002"
         f"?price=__${prix_max}"
