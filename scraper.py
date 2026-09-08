@@ -494,17 +494,24 @@ def formater_notification(annonce: dict, analyse: dict) -> str:
 # LOGIQUE PRINCIPALE
 # ═══════════════════════════════════════════════════════════════
 
-
 def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
     """
     Applique tous les filtres sur une annonce.
     Retourne (acceptée: bool, analyse: dict)
     """
-    # Filtre prix
-    if annonce["prix"] and annonce["prix"] > CONFIG["prix_max"]:
+    # ❌ Pas de prix = on skip
+    if annonce["prix"] is None:
+        return False, {"raison": "Aucun prix indiqué"}
+
+    # ❌ Prix trop élevé
+    if annonce["prix"] > CONFIG["prix_max"]:
         return False, {"raison": f"Prix trop élevé: ${annonce['prix']}"}
 
-    # Filtre km
+    # ❌ Prix suspectement bas (probable arnaque ou pour pièces)
+    if annonce["prix"] < 300:
+        return False, {"raison": f"Prix trop bas (arnaque?): ${annonce['prix']}"}
+
+    # ❌ Trop de km
     if annonce["km"] and annonce["km"] > CONFIG["km_max"]:
         return False, {"raison": f"Trop de km: {annonce['km']}"}
 
@@ -513,8 +520,33 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
     if "corolla" not in texte:
         return False, {"raison": "Pas une Corolla"}
 
+    # ❌ Filtrer les concessionnaires et annonces commerciales
+    mots_concessionnaire = [
+        r"concessionnaire", r"dealership", r"dealer",
+        r"certified\s+pre.owned", r"véhicule\s+certifié",
+        r"financement\s+disponible", r"financing\s+available",
+        r"garantie\s+prolongée", r"extended\s+warranty",
+        r"www\.", r"\.com", r"\.ca",
+        r"venez\s+nous\s+voir", r"come\s+visit",
+        r"notre\s+inventaire", r"our\s+inventory",
+        r"appelez.nous", r"call\s+us\s+today",
+        r"car\s*fax", r"carproof",
+        r"auto\s*trader", r"autotrader",
+        r"groupe\s+auto", r"auto\s+group",
+        r"motors?\s+(inc|ltd|ltée|enr)",
+        r"autos?\s+(inc|ltd|ltée|enr)",
+    ]
+    for pattern in mots_concessionnaire:
+        if re.search(pattern, texte):
+            return False, {"raison": f"Concessionnaire détecté: {pattern}"}
+
+    # ❌ Filtrer les voitures trop récentes (neuves/quasi-neuves)
+    annees_recentes = [str(y) for y in range(2020, 2027)]
+    for annee in annees_recentes:
+        if annee in annonce["titre"]:
+            return False, {"raison": f"Voiture trop récente ({annee})"}
+
     # Analyse les problèmes
-    # On va chercher la description complète pour mieux analyser
     details = obtenir_details(annonce)
     texte_complet = f"{annonce['texte_complet']} {details}"
     analyse = analyser_problemes(texte_complet)
@@ -531,6 +563,7 @@ def filtrer_annonce(annonce: dict) -> tuple[bool, dict]:
                 return False, {"raison": f"Trop de km (détails): {km}"}
 
     return True, analyse
+
 
 
 def executer():
